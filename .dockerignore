@@ -1,0 +1,16 @@
+.git
+.venv
+.venv-broken-py314
+__pycache__
+.pytest_cache
+*.pyc
+
+data
+artifacts
+mlruns
+mlflow.db
+
+tests
+requirements-dev.txt
+
+README.md
