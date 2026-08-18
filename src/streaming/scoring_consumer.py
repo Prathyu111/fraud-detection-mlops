@@ -1,6 +1,15 @@
 import json
 import os
+import time
 from datetime import datetime, timezone
+
+from prometheus_client import (
+    Counter,
+    Gauge,
+    Histogram,
+    start_http_server,
+)
+
 
 import mlflow
 import mlflow.sklearn
@@ -31,6 +40,10 @@ MLFLOW_TRACKING_URI = os.getenv(
 
 DECISION_THRESHOLD = 0.9637078
 
+METRICS_PORT = int(
+    os.getenv("METRICS_PORT", "8001")
+)
+
 MODEL_FEATURES = [
     "amt",
     "category",
@@ -42,6 +55,51 @@ MODEL_FEATURES = [
     "merchant_distance_km",
 ]
 
+PREDICTIONS_TOTAL = Counter(
+    "fraud_predictions_total",
+    "Total number of scored transactions.",
+    ["prediction"],
+)
+
+PREDICTION_ERRORS_TOTAL = Counter(
+    "fraud_prediction_errors_total",
+    "Total number of scoring errors.",
+)
+
+PREDICTION_SCORE = Histogram(
+    "fraud_prediction_score",
+    "Distribution of model fraud scores.",
+    buckets=(
+        0.01,
+        0.05,
+        0.10,
+        0.25,
+        0.50,
+        0.75,
+        0.90,
+        0.95,
+        0.97,
+        0.99,
+        1.0,
+    ),
+)
+
+SCORING_LATENCY = Histogram(
+    "fraud_scoring_latency_seconds",
+    "Time required to score a transaction.",
+)
+
+CONFUSION_MATRIX_TOTAL = Counter(
+    "fraud_confusion_matrix_total",
+    "Prediction outcomes compared with labels.",
+    ["actual", "predicted"],
+)
+
+MODEL_INFO = Gauge(
+    "fraud_model_info",
+    "Information about the active fraud model.",
+    ["model_name", "model_alias"],
+)
 
 def load_model():
     mlflow.set_tracking_uri(
@@ -118,6 +176,18 @@ def delivery_report(error, message):
 def main():
     model = load_model()
 
+    MODEL_INFO.labels(
+        model_name=MODEL_NAME,
+        model_alias=MODEL_ALIAS,
+    ).set(1)
+
+    start_http_server(METRICS_PORT)
+
+    print(
+        "Prometheus metrics available at "
+        f"http://127.0.0.1:{METRICS_PORT}/metrics"
+    )
+
     consumer = Consumer(
         {
             "bootstrap.servers": KAFKA_SERVERS,
@@ -160,9 +230,26 @@ def main():
                     message.value().decode("utf-8")
                 )
 
+                scoring_started = (
+                    time.perf_counter()
+                )
+
                 prediction = create_prediction(
                     model,
                     event,
+                )
+
+                scoring_duration = (
+                    time.perf_counter()
+                    - scoring_started
+                )
+
+                SCORING_LATENCY.observe(
+                    scoring_duration
+                )
+
+                PREDICTION_SCORE.observe(
+                    prediction["fraud_score"]
                 )
 
                 producer.produce(
@@ -190,6 +277,32 @@ def main():
                     asynchronous=False,
                 )
 
+                prediction_label = (
+                    "fraud"
+                    if prediction["is_fraud"]
+                    else "legitimate"
+                )
+
+                PREDICTIONS_TOTAL.labels(
+                    prediction=prediction_label
+                ).inc()
+
+                actual_label = prediction.get(
+                    "actual_is_fraud"
+                )
+
+                if actual_label in (0, 1):
+                    CONFUSION_MATRIX_TOTAL.labels(
+                        actual=str(actual_label),
+                        predicted=str(
+                            int(
+                                prediction[
+                                    "is_fraud"
+                                ]
+                            )
+                        ),
+                    ).inc()
+
                 print(
                     f"event_id={prediction['event_id']} "
                     f"score={prediction['fraud_score']:.4f} "
@@ -200,6 +313,8 @@ def main():
                 )
 
             except Exception as error:
+                PREDICTION_ERRORS_TOTAL.inc()
+
                 print(
                     "Failed to score message "
                     f"partition={message.partition()} "
