@@ -14,7 +14,9 @@ from pyspark.sql.functions import (
     radians,
     sin,
     sqrt,
+    struct,
     to_date,
+    to_json,
     to_timestamp,
 )
 from pyspark.sql.types import (
@@ -28,8 +30,14 @@ from pyspark.sql.types import (
 
 KAFKA_SERVERS = "kafka:9092"
 SOURCE_TOPIC = "fraud-transactions"
-CHECKPOINT_PATH = (
-    "/tmp/spark-checkpoints/fraud-features"
+FEATURE_TOPIC = "fraud-features"
+
+KAFKA_CHECKPOINT_PATH = (
+    "/tmp/spark-checkpoints/fraud-features-kafka-v2"
+)
+
+CONSOLE_CHECKPOINT_PATH = (
+    "/tmp/spark-checkpoints/fraud-features-console-v1"
 )
 
 
@@ -208,6 +216,14 @@ def main():
             "offset",
             "kafka_timestamp",
         )
+
+        .withWatermark(
+            "kafka_timestamp",
+            "10 minutes",
+        )
+        .dropDuplicatesWithinWatermark(
+            ["event_id"]
+        )
     )
 
     features = add_features(
@@ -227,14 +243,45 @@ def main():
         "offset",
     )
 
-    query = (
+    kafka_output = features.select(
+        col("event_id").cast("string").alias("key"),
+        to_json(
+            struct(
+                *[
+                    col(column_name)
+                    for column_name in features.columns
+                ]
+            )
+        ).alias("value"),
+    )
+
+    kafka_query = (
+        kafka_output.writeStream
+        .format("kafka")
+        .outputMode("append")
+        .option(
+            "kafka.bootstrap.servers",
+            KAFKA_SERVERS,
+        )
+        .option(
+            "topic",
+            FEATURE_TOPIC,
+        )
+        .option(
+            "checkpointLocation",
+            KAFKA_CHECKPOINT_PATH,
+        )
+        .start()
+    )
+
+    console_query = (
         features.writeStream
         .format("console")
         .outputMode("append")
         .option("truncate", False)
         .option(
             "checkpointLocation",
-            CHECKPOINT_PATH,
+            CONSOLE_CHECKPOINT_PATH,
         )
         .start()
     )
@@ -242,8 +289,11 @@ def main():
     print(
         "Spark Structured Streaming started."
     )
+    print(
+        f"Publishing engineered features to {FEATURE_TOPIC}."
+    )
 
-    query.awaitTermination()
+    spark.streams.awaitAnyTermination()
 
 
 if __name__ == "__main__":

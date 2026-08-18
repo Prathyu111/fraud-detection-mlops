@@ -47,6 +47,7 @@ def create_event(row):
 def sample_transactions(
     data_path: Path,
     count: int,
+    seed: int | None = None,
 ):
     if count < 2:
         raise ValueError(
@@ -68,12 +69,12 @@ def sample_transactions(
 
     sampled_fraud = fraud.sample(
         n=fraud_count,
-        random_state=42,
+        random_state=seed,
     )
 
     sampled_legitimate = legitimate.sample(
         n=legitimate_count,
-        random_state=42,
+        random_state=seed,
     )
 
     return pd.concat(
@@ -83,7 +84,7 @@ def sample_transactions(
         ]
     ).sample(
         frac=1,
-        random_state=42,
+        random_state=seed,
     )
 
 
@@ -92,6 +93,7 @@ def publish_transactions(
     count: int,
     topic: str,
     bootstrap_servers: str,
+    seed: int | None = None,
 ):
     producer = Producer(
         {
@@ -105,6 +107,7 @@ def publish_transactions(
     transactions = sample_transactions(
         data_path=data_path,
         count=count,
+        seed=seed,
     )
 
     print(
@@ -164,6 +167,16 @@ def parse_args():
         default=DEFAULT_BOOTSTRAP_SERVERS,
     )
 
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Optional seed for reproducible "
+            "transaction sampling."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -175,4 +188,5 @@ if __name__ == "__main__":
         count=args.count,
         topic=args.topic,
         bootstrap_servers=args.bootstrap_servers,
+        seed=args.seed,
     )
