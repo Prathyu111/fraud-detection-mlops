@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fraud-api-config
+  namespace: fraud-detection
+data:
+  MODEL_URI: /app/deployment_model
