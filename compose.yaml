@@ -5,6 +5,9 @@ services:
 
     ports:
       - "29092:29092"
+    
+    volumes:
+      - kafka-data:/tmp/kraft-combined-logs
 
     environment:
       KAFKA_NODE_ID: 1
@@ -46,3 +49,39 @@ services:
       timeout: 10s
       retries: 10
       start_period: 20s
+
+  spark:
+    image: >-
+      apache/spark:4.0.1-scala2.13-java17-python3-ubuntu
+
+    container_name: fraud-spark
+
+    # Allows the local development container to write
+    # dependency-cache and checkpoint files.
+    user: "0:0"
+
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+    volumes:
+      - ./src:/opt/spark/work-dir/src:ro
+      - spark-checkpoints:/tmp/spark-checkpoints
+      - spark-ivy:/tmp/.ivy2
+
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - "local[*]"
+      - --conf
+      - spark.jars.ivy=/tmp/.ivy2
+      - --packages
+      - >-
+        org.apache.spark:spark-sql-kafka-0-10_2.13:4.0.1
+      - >-
+        /opt/spark/work-dir/src/streaming/spark_processor.py
+
+volumes:
+  kafka-data:
+  spark-checkpoints:
+  spark-ivy:
